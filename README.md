@@ -2,6 +2,11 @@
 
 A React-based web application for scoring the card game "Dim". Built with TypeScript and Material-UI, this app provides a modern, intuitive interface for tracking scores in multiplayer games.
 
+## TODOs:
+- store complete games in database
+- highlight bust vs successful hands in display scores
+- hide bets once entered
+
 ## Features
 
 - Support for 2-10 players
