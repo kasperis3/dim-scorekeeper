@@ -1160,9 +1160,6 @@ function App() {
               },
               '& .MuiTableRow-root': {
                 transition: 'background-color 0.2s ease-in-out',
-                '&:nth-of-type(odd)': {
-                  backgroundColor: 'rgba(0, 0, 0, 0.02)',
-                },
                 '&:hover': {
                   backgroundColor: 'rgba(124, 77, 255, 0.05)',
                 },
@@ -1246,9 +1243,7 @@ function App() {
                     sx={{
                       backgroundColor: isRoundActive(roundIndex)
                         ? 'rgba(124, 77, 255, 0.15)'  // Vivid purple background for current round
-                        : round.isComplete 
-                          ? 'rgba(76, 175, 80, 0.25)'  // More vibrant green for completed rounds
-                          : 'inherit',
+                        : 'inherit',  // No special background for other rounds
                       opacity: !isRoundActive(roundIndex) && !round.isComplete ? 0.5 : 1,
                       '& .MuiTableCell-root': {
                         position: 'relative',
@@ -1260,18 +1255,13 @@ function App() {
                           zIndex: 1,
                           transition: 'all 0.2s ease-in-out',
                           borderRadius: '4px'
-                        }),
-                        ...(round.isComplete && {
-                          borderColor: 'rgba(76, 175, 80, 0.3)'  // Green border for completed rounds
                         })
                       },
                       transition: 'background-color 0.2s ease-in-out',
                       '&:hover': {
                         backgroundColor: isRoundActive(roundIndex)
                           ? 'rgba(124, 77, 255, 0.2)'
-                          : round.isComplete
-                            ? 'rgba(76, 175, 80, 0.3)'
-                            : 'rgba(0, 0, 0, 0.02)'
+                          : 'rgba(0, 0, 0, 0.02)'
                       }
                     }}
                   >
