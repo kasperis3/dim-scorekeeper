@@ -196,15 +196,18 @@ function App() {
 
   useEffect(() => {
     if (gameState) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(gameState));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        ...gameState,
+        currentRound: currentRoundIndex
+      }));
       
-      const currentRound = gameState.rounds[gameState.currentRound];
+      const currentRound = gameState.rounds[currentRoundIndex];
       if (!currentRound.isComplete && !betsConfirmed) {
         const nextPlayer = findNextBettingPlayer(currentRound);
         setCurrentBettingPlayer(nextPlayer);
       }
     }
-  }, [gameState, findNextBettingPlayer, betsConfirmed]);
+  }, [gameState, findNextBettingPlayer, betsConfirmed, currentRoundIndex]);
 
   const initializeGame = (players: number, rounds: number) => {
     // Check for empty names
@@ -447,7 +450,11 @@ function App() {
       playSound('win');
     }
     
-    setGameState({ ...gameState, rounds: newRounds });
+    setGameState({ 
+      ...gameState, 
+      rounds: newRounds,
+      currentRound: nextRoundIndex < newRounds.length ? nextRoundIndex : currentRoundIndex
+    });
     setShowHandsConfirmation(false);
     setError('');
   };
