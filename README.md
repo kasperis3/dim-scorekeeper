@@ -2,10 +2,10 @@
 
 A React-based web application for scoring the card game "Dim". Built with TypeScript and Material-UI, this app provides a modern, intuitive interface for tracking scores in multiplayer games.
 
-## TODOs:
-- store complete games in database
-- highlight bust vs successful hands in display scores
-- hide bets once entered
+## TODOs
+
+- Store complete games in a database
+- Hide bets once entered
 
 ## Features
 
@@ -15,6 +15,11 @@ A React-based web application for scoring the card game "Dim". Built with TypeSc
 - Automatic dealer rotation
 - Betting and hand recording with validation
 - Real-time score calculation
+- **Sticky scoreboard header** — player names and running totals stay visible while scrolling through rounds
+- **Bust vs success highlighting** — completed round scores are color-coded green (made the bet) or red (bust)
+- **Win streaks** — fire indicator on rounds where a player has 2+ consecutive successful bets
+- **Cards-dealt gate** — before betting opens each round, the dealer confirms shuffle/deal via a row overlay (betting timer does not start until ready)
+- **First-round setup hints** — setup page shows who deals and bets first
 - Visual indicators for:
   - Current round and dealer
   - Leading players (crown icons)
