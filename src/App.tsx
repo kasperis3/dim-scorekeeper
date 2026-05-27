@@ -521,21 +521,6 @@ function App() {
     return streak;
   }, [gameState]);
 
-  const getCurrentStreak = useCallback((playerIndex: number): number => {
-    if (!gameState) return 0;
-    let streak = 0;
-    for (let i = gameState.rounds.length - 1; i >= 0; i--) {
-      const r = gameState.rounds[i];
-      if (!r.isComplete) continue;
-      if (r.hands[playerIndex] === r.bets[playerIndex]) {
-        streak++;
-      } else {
-        break;
-      }
-    }
-    return streak;
-  }, [gameState]);
-
   const handleNewGame = () => {
     localStorage.removeItem(STORAGE_KEY);
     setGameState(null);
