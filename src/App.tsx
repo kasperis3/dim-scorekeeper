@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
 import { useWindowSize } from 'react-use';
 import Confetti from 'react-confetti';
 import { 
@@ -63,6 +63,15 @@ function App() {
   const [playerCount, setPlayerCount] = useState<string>('4');
   const [roundCount, setRoundCount] = useState<string>('10');
   const [playerNames, setPlayerNames] = useState<string[]>(() => DEFAULT_NAMES.slice(0, 4));
+  const firstRoundPreview = useMemo(() => {
+    const players = parseInt(playerCount || '4');
+    const firstDealerIndex = players - 1;
+    const firstBettingIndex = 0;
+    return {
+      dealerName: playerNames[firstDealerIndex]?.trim() || `Player ${firstDealerIndex + 1}`,
+      bettingName: playerNames[firstBettingIndex]?.trim() || `Player ${firstBettingIndex + 1}`,
+    };
+  }, [playerCount, playerNames]);
   const [error, setError] = useState<string>('');
   const [showNewGameDialog, setShowNewGameDialog] = useState(false);
   const [showNewGamePrompt, setShowNewGamePrompt] = useState(false);
@@ -157,9 +166,18 @@ function App() {
     return false;
   });
 
-  const [showDealerReminder, setShowDealerReminder] = useState<boolean>(false);
+  const [cardsDealtReady, setCardsDealtReady] = useState(false);
   const [bettingTimer, setBettingTimer] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const activeRowRef = useRef<HTMLTableRowElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [rowOverlayPos, setRowOverlayPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    clipTop: number;
+  } | null>(null);
 
   // Add sound effect function before its usage
   const playSound = useCallback((soundType: keyof typeof SOUNDS) => {
@@ -221,6 +239,7 @@ function App() {
     setHandsConfirmed(false);
     setShowBetsConfirmation(false);
     setShowHandsConfirmation(false);
+    setCardsDealtReady(false);
     setError('');
 
     const roundsArray: Round[] = [];
@@ -443,6 +462,7 @@ function App() {
       setCurrentRoundIndex(nextRoundIndex);
       setBetsConfirmed(false);
       setHandsConfirmed(false);
+      setCardsDealtReady(false);
       const nextPlayer = findNextBettingPlayer(newRounds[nextRoundIndex]);
       setCurrentBettingPlayer(nextPlayer);
     } else {
@@ -486,6 +506,21 @@ function App() {
     return gameState.rounds.reduce((sum, round) => sum + (round.scores[playerIndex] || 0), 0);
   }, [gameState]);
 
+  const getStreakAt = useCallback((playerIndex: number, roundIndex: number): number => {
+    if (!gameState) return 0;
+    let streak = 0;
+    for (let i = roundIndex; i >= 0; i--) {
+      const r = gameState.rounds[i];
+      if (!r.isComplete) break;
+      if (r.hands[playerIndex] === r.bets[playerIndex]) {
+        streak++;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }, [gameState]);
+
   const handleNewGame = () => {
     localStorage.removeItem(STORAGE_KEY);
     setGameState(null);
@@ -496,6 +531,7 @@ function App() {
     setHandsConfirmed(false);
     setShowBetsConfirmation(false);
     setShowHandsConfirmation(false);
+    setCardsDealtReady(false);
     setCurrentBettingPlayer(-1);
     setRoundCount('10');  // Set default round count
     setError('');
@@ -604,7 +640,7 @@ function App() {
     if (!gameState || !isRoundActive(currentRoundIndex)) return;
     
     const BETTING_TIME = 30; // seconds
-    if (currentBettingPlayer !== -1 && !betsConfirmed) {
+    if (currentBettingPlayer !== -1 && !betsConfirmed && cardsDealtReady) {
       setBettingTimer(BETTING_TIME);
       const interval = setInterval(() => {
         setBettingTimer(prev => {
@@ -623,19 +659,58 @@ function App() {
     } else {
       setBettingTimer(null);
     }
-  }, [gameState, currentRoundIndex, currentBettingPlayer, betsConfirmed, playSound, isRoundActive]);
+  }, [gameState, currentRoundIndex, currentBettingPlayer, betsConfirmed, cardsDealtReady, playSound, isRoundActive]);
 
-  // Add this effect to show dealer reminder
-  useEffect(() => {
-    if (!gameState || !isRoundActive(currentRoundIndex)) return;
-    
-    const currentRound = gameState.rounds[currentRoundIndex];
-    if (!currentRound.isComplete && !betsConfirmed && currentBettingPlayer === (currentRound.dealer + 1) % gameState.players) {
-      setShowDealerReminder(true);
-      const timer = setTimeout(() => setShowDealerReminder(false), 3000);
-      return () => clearTimeout(timer);
+  const showCardsDealtOverlay =
+    !!gameState &&
+    isRoundActive(currentRoundIndex) &&
+    !betsConfirmed &&
+    !cardsDealtReady &&
+    !gameState.rounds[currentRoundIndex]?.isComplete;
+
+  const updateRowOverlayPos = useCallback(() => {
+    const row = activeRowRef.current;
+    const container = tableContainerRef.current;
+    if (!row || !container) {
+      setRowOverlayPos(null);
+      return;
     }
-  }, [gameState, currentRoundIndex, currentBettingPlayer, betsConfirmed, gameState?.players, isRoundActive]);
+    const rowRect = row.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const thead = container.querySelector('thead');
+    const headerHeight = thead?.getBoundingClientRect().height ?? 0;
+    const visibleTop = rowRect.top - containerRect.top;
+    const clipTop = Math.max(0, headerHeight - visibleTop);
+    const height = rowRect.height;
+
+    if (clipTop >= height - 2) {
+      setRowOverlayPos(null);
+      return;
+    }
+
+    setRowOverlayPos({
+      top: rowRect.top - containerRect.top + container.scrollTop,
+      left: rowRect.left - containerRect.left + container.scrollLeft,
+      width: rowRect.width,
+      height,
+      clipTop,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!showCardsDealtOverlay) {
+      setRowOverlayPos(null);
+      return;
+    }
+    updateRowOverlayPos();
+    window.addEventListener('resize', updateRowOverlayPos);
+    const container = tableContainerRef.current;
+    container?.addEventListener('scroll', updateRowOverlayPos, { passive: true });
+    return () => {
+      window.removeEventListener('resize', updateRowOverlayPos);
+      container?.removeEventListener('scroll', updateRowOverlayPos);
+    };
+  }, [showCardsDealtOverlay, updateRowOverlayPos, currentRoundIndex]);
 
   // Create theme - simplified for light mode only
   const theme = useMemo(
@@ -872,6 +947,25 @@ function App() {
                 />
               ))}
             </Box>
+
+            <Alert 
+              severity="info" 
+              sx={{ 
+                mb: 3,
+                borderRadius: '12px',
+                '& .MuiAlert-message': { width: '100%' }
+              }}
+            >
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+                First round heads up
+              </Typography>
+              <Typography variant="body2">
+                <strong>{firstRoundPreview.dealerName}</strong> deals first
+              </Typography>
+              <Typography variant="body2">
+                <strong>{firstRoundPreview.bettingName}</strong> bets first
+              </Typography>
+            </Alert>
 
             <Button 
               variant="contained" 
@@ -1150,10 +1244,9 @@ function App() {
           border: '2px solid rgba(124, 77, 255, 0.2)',
           boxShadow: '0 4px 20px rgba(124, 77, 255, 0.1)',
           position: 'relative',
-          overflow: 'hidden'
         }}>
-          <TableContainer>
-            <Table size="small" sx={{
+          <TableContainer ref={tableContainerRef} sx={{ position: 'relative', maxHeight: 'calc(100vh - 180px)', overflow: 'auto' }}>
+            <Table stickyHeader size="small" sx={{
               '& .MuiTableCell-root': {
                 color: '#1a237e',
                 transition: 'background-color 0.2s ease-in-out',
@@ -1170,10 +1263,10 @@ function App() {
                   backgroundColor: 'rgba(124, 77, 255, 0.12)',
                 },
               },
-              '& .MuiTableHead-root': {
-                '& .MuiTableRow-root': {
-                  backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                },
+              '& .MuiTableHead-root .MuiTableCell-root': {
+                backgroundColor: '#ffffff',
+                zIndex: 20,
+                boxShadow: '0 1px 0 #ffffff',
               },
             }}>
               <TableHead>
@@ -1195,9 +1288,9 @@ function App() {
                     <TableCell 
                       key={i}
                       sx={{
-                        position: 'relative',
                         textAlign: 'center',
-                        minWidth: { xs: '100px', sm: '120px', md: '140px' }
+                        minWidth: { xs: '100px', sm: '120px', md: '140px' },
+                        paddingTop: '28px',
                       }}
                     >
                       <Box sx={{ 
@@ -1205,7 +1298,6 @@ function App() {
                         display: 'flex',
                         flexDirection: 'column',
                         alignItems: 'center',
-                        pt: 1
                       }}>
                         {calculateTotalScore(i) > 0 && calculateTotalScore(i) === getHighestScore(gameState) && (
                           <Typography 
@@ -1231,18 +1323,47 @@ function App() {
                         }}>
                           {gameState.playerNames[i]}
                         </Typography>
+                        <Typography 
+                          variant="subtitle1" 
+                          sx={{ 
+                            fontWeight: 800,
+                            color: calculateTotalScore(i) === getHighestScore(gameState) && calculateTotalScore(i) > 0 ? '#7C4DFF' : '#1a237e',
+                            mt: 0.5,
+                          }}
+                        >
+                          {calculateTotalScore(i)}
+                        </Typography>
                       </Box>
                     </TableCell>
                   ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {gameState.rounds.map((round, roundIndex) => (
+                {gameState.rounds.map((round, roundIndex) => {
+                  const isActiveRowOverlay =
+                    showCardsDealtOverlay && isRoundActive(roundIndex);
+                  const rowHiddenUnderHeader = isActiveRowOverlay && !rowOverlayPos;
+                  const activeRowCellSx = isActiveRowOverlay
+                    ? {
+                        pointerEvents: 'none' as const,
+                        visibility: rowHiddenUnderHeader ? ('hidden' as const) : ('visible' as const),
+                        opacity: rowHiddenUnderHeader ? 0 : 0.25,
+                        ...(rowOverlayPos && rowOverlayPos.clipTop > 0 && {
+                          clipPath: `inset(${rowOverlayPos.clipTop}px 0 0 0)`,
+                        }),
+                      }
+                    : undefined;
+
+                  return (
                   <TableRow 
                     key={roundIndex}
+                    ref={isRoundActive(roundIndex) ? activeRowRef : undefined}
                     sx={{
+                      position: 'relative',
                       backgroundColor: isRoundActive(roundIndex)
-                        ? 'rgba(124, 77, 255, 0.15)'  // Vivid purple background for current round
+                        ? isActiveRowOverlay
+                          ? 'transparent'
+                          : 'rgba(124, 77, 255, 0.15)'  // Vivid purple background for current round
                         : 'inherit',  // No special background for other rounds
                       opacity: !isRoundActive(roundIndex) && !round.isComplete ? 0.5 : 1,
                       '& .MuiTableCell-root': {
@@ -1250,8 +1371,8 @@ function App() {
                         ...(isRoundActive(roundIndex) && {
                           padding: '24px 16px',
                           fontSize: '1.15rem',
-                          transform: 'scale(1.02)',
-                          boxShadow: '0 2px 12px rgba(124, 77, 255, 0.3)',  // Matching purple shadow
+                          transform: isActiveRowOverlay ? 'none' : 'scale(1.02)',
+                          boxShadow: isActiveRowOverlay ? 'none' : '0 2px 12px rgba(124, 77, 255, 0.3)',
                           zIndex: 1,
                           transition: 'all 0.2s ease-in-out',
                           borderRadius: '4px'
@@ -1265,7 +1386,7 @@ function App() {
                       }
                     }}
                   >
-                    <TableCell>
+                    <TableCell sx={activeRowCellSx}>
                       <Box>
                         <Typography variant="h4" sx={{ 
                           fontWeight: 700,
@@ -1355,6 +1476,7 @@ function App() {
                       <TableCell 
                         key={playerIndex}
                         sx={{
+                          ...activeRowCellSx,
                           position: 'relative',
                           border: currentBettingPlayer === playerIndex && 
                                  !round.isComplete && 
@@ -1392,10 +1514,11 @@ function App() {
                                   round.isComplete || 
                                   !isRoundActive(roundIndex) ||
                                   !isPlayerTurn(round, playerIndex) ||
-                                  betsConfirmed
+                                  betsConfirmed ||
+                                  !cardsDealtReady
                                 }
                                 IconComponent={
-                                  (round.isComplete || betsConfirmed || !isRoundActive(roundIndex) || !isPlayerTurn(round, playerIndex)) 
+                                  (round.isComplete || betsConfirmed || !isRoundActive(roundIndex) || !isPlayerTurn(round, playerIndex) || !cardsDealtReady) 
                                     ? () => null 
                                     : undefined
                                 }
@@ -1477,12 +1600,28 @@ function App() {
                           <Box sx={{ 
                             gridArea: 'score',
                             display: 'flex',
+                            flexDirection: 'column',
                             justifyContent: 'center',
-                            alignItems: 'center'
+                            alignItems: 'center',
                           }}>
-                            <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                            <Typography variant="h5" sx={{ 
+                              fontWeight: 'bold',
+                              ...(round.isComplete && {
+                                color: round.hands[playerIndex] === round.bets[playerIndex] ? '#2e7d32' : '#c62828',
+                                backgroundColor: round.hands[playerIndex] === round.bets[playerIndex] 
+                                  ? 'rgba(46, 125, 50, 0.1)' 
+                                  : 'rgba(198, 40, 40, 0.1)',
+                                borderRadius: '8px',
+                                padding: '4px 12px',
+                              })
+                            }}>
                               {round.scores[playerIndex] || 0}
                             </Typography>
+                            {round.isComplete && round.hands[playerIndex] === round.bets[playerIndex] && getStreakAt(playerIndex, roundIndex) >= 2 && (
+                              <Typography sx={{ fontSize: '16px', fontWeight: 700, color: '#e65100', mt: 0.5 }}>
+                                🔥 x{getStreakAt(playerIndex, roundIndex)}
+                              </Typography>
+                            )}
                           </Box>
                           {isRoundActive(roundIndex) && !round.isComplete && (
                             <Box sx={{ 
@@ -1518,7 +1657,8 @@ function App() {
                       </TableCell>
                     ))}
                   </TableRow>
-                ))}
+                  );
+                })}
                 <TableRow sx={{ 
                   backgroundColor: 'rgba(124, 77, 255, 0.05)',
                   borderTop: '2px solid rgba(124, 77, 255, 0.2)'
@@ -1535,6 +1675,17 @@ function App() {
                   {Array.from({ length: gameState.players }, (_, playerIndex) => (
                     <TableCell key={playerIndex}>
                       <Typography 
+                        variant="subtitle1" 
+                        sx={{ 
+                          textAlign: 'center',
+                          fontWeight: 700,
+                          color: '#1a237e',
+                          mb: 0.5,
+                        }}
+                      >
+                        {gameState.playerNames[playerIndex]}
+                      </Typography>
+                      <Typography 
                         variant="h4" 
                         sx={{ 
                           textAlign: 'center',
@@ -1543,27 +1694,81 @@ function App() {
                           padding: '12px 24px',
                           borderRadius: '12px',
                           transition: 'all 0.3s ease',
-                          position: 'relative',
                           ...(calculateTotalScore(playerIndex) === getHighestScore(gameState) && {
                             transform: 'scale(1.1)',
-                            '&::before': {
-                              content: '"👑"',
-                              position: 'absolute',
-                              top: '-24px',
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              fontSize: '24px'
-                            }
                           })
                         }}
                       >
                         {calculateTotalScore(playerIndex)}
                       </Typography>
+                      {calculateTotalScore(playerIndex) === getHighestScore(gameState) && calculateTotalScore(playerIndex) > 0 && (
+                        <Typography sx={{ textAlign: 'center', fontSize: '24px', mt: 0.5 }}>
+                          👑
+                        </Typography>
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
               </TableBody>
             </Table>
+            {rowOverlayPos && showCardsDealtOverlay && gameState && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: rowOverlayPos.top,
+                  left: rowOverlayPos.left,
+                  width: rowOverlayPos.width,
+                  height: rowOverlayPos.height,
+                  zIndex: 5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#ffffff',
+                  borderRadius: '4px',
+                  pointerEvents: 'auto',
+                  clipPath: rowOverlayPos.clipTop > 0
+                    ? `inset(${rowOverlayPos.clipTop}px 0 0 0)`
+                    : undefined,
+                }}
+              >
+                <Paper
+                  elevation={8}
+                  sx={{
+                    p: 3,
+                    borderRadius: '12px',
+                    border: '2px solid rgba(124, 77, 255, 0.4)',
+                    maxWidth: 420,
+                    mx: 2,
+                    textAlign: 'center',
+                    backgroundColor: '#ffffff',
+                  }}
+                >
+                  <Typography variant="h6" sx={{ fontWeight: 700, color: '#1a237e', mb: 1 }}>
+                    Round {gameState.rounds[currentRoundIndex].number}
+                  </Typography>
+                  <Typography variant="body1" sx={{ color: '#1a237e', mb: 2 }}>
+                    <strong>{gameState.playerNames[gameState.rounds[currentRoundIndex].dealer]}</strong>
+                    {' '}— shuffle and deal, then start betting
+                  </Typography>
+                  <Button
+                    variant="contained"
+                    onClick={() => setCardsDealtReady(true)}
+                    sx={{
+                      backgroundColor: '#7C4DFF',
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      fontSize: '1.1rem',
+                      py: 1.25,
+                      px: 3,
+                      borderRadius: '12px',
+                      '&:hover': { backgroundColor: '#6039CC' },
+                    }}
+                  >
+                    Cards dealt — start betting
+                  </Button>
+                </Paper>
+              </Box>
+            )}
           </TableContainer>
         </Paper>
 
@@ -1678,7 +1883,7 @@ function App() {
           </DialogActions>
         </Dialog>
 
-        {(showDealerReminder || bettingTimer !== null) && (
+        {bettingTimer !== null && (
           <Box sx={{
             position: 'fixed',
             top: 20,
@@ -1690,21 +1895,7 @@ function App() {
             alignItems: 'center',
             gap: 2
           }}>
-            {showDealerReminder && (
-              <Alert 
-                severity="info"
-                sx={{
-                  animation: 'slideDown 0.3s ease-out',
-                  '@keyframes slideDown': {
-                    from: { transform: 'translateY(-20px)', opacity: 0 },
-                    to: { transform: 'translateY(0)', opacity: 1 }
-                  }
-                }}
-              >
-                Don't forget to deal the cards! 🎴
-              </Alert>
-            )}
-            {bettingTimer !== null && bettingTimer <= 10 && (
+            {bettingTimer <= 10 && (
               <Alert 
                 severity={bettingTimer <= 5 ? "warning" : "info"}
                 sx={{
