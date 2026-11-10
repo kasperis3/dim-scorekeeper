@@ -30,19 +30,32 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { GameState, Round, Suit } from './types';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { CssBaseline } from '@mui/material';
+import {
+  getValidBetNumbers,
+  isBettingTurn,
+  findNextBettingPlayer as findNextBettingPlayerPure,
+  areAllBetsEntered,
+  areBetsValid as areBetsValidPure,
+  getValidHandNumbers as getValidHandNumbersPure,
+  isLastHandsInput as isLastHandsInputPure,
+  isLastBettingPlayer as isLastBettingPlayerPure,
+  calculateRoundScores,
+  calculateTotalScore as calculateTotalScorePure,
+  isLeadingPlayer,
+  getStreakAt as getStreakAtPure,
+  inferCardsDealtReady,
+  cancelBetsEditTarget,
+  findFirstIncompleteRoundIndex,
+} from './gameLogic';
+import {
+  loadGameState,
+  saveGameState,
+  clearGameState,
+  setupFieldsFromGame,
+} from './storage';
 
 const SUITS = [Suit.SPADES, Suit.HEARTS, Suit.DIAMONDS, Suit.CLUBS, Suit.NO_TRUMP];
-const STORAGE_KEY = 'cardGameState';
 const DEFAULT_NAMES = ['Fuzzy', 'Duzzy', 'Kasper', 'Wesley', 'Mili', 'Tigger', 'Tiger', 'Goose', 'Moose', 'Fatty'];
-
-const getHighestScore = (gameState: GameState): number => {
-  let maxScore = -1;
-  for (let i = 0; i < gameState.players; i++) {
-    const score = gameState.rounds.reduce((sum, round) => sum + (round.scores[i] || 0), 0);
-    maxScore = Math.max(maxScore, score);
-  }
-  return maxScore;
-};
 
 // Add sound effect URLs
 const SOUNDS = {
@@ -55,14 +68,20 @@ const SOUNDS = {
 
 function App() {
   const { width, height } = useWindowSize();
-  const [gameState, setGameState] = useState<GameState | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [gameState, setGameState] = useState<GameState | null>(() => loadGameState());
 
-  const [playerCount, setPlayerCount] = useState<string>('4');
-  const [roundCount, setRoundCount] = useState<string>('10');
-  const [playerNames, setPlayerNames] = useState<string[]>(() => DEFAULT_NAMES.slice(0, 4));
+  const [playerCount, setPlayerCount] = useState<string>(() => {
+    const saved = loadGameState();
+    return saved ? setupFieldsFromGame(saved).playerCount : '4';
+  });
+  const [roundCount, setRoundCount] = useState<string>(() => {
+    const saved = loadGameState();
+    return saved ? setupFieldsFromGame(saved).roundCount : '10';
+  });
+  const [playerNames, setPlayerNames] = useState<string[]>(() => {
+    const saved = loadGameState();
+    return saved ? setupFieldsFromGame(saved).playerNames : DEFAULT_NAMES.slice(0, 4);
+  });
   const firstRoundPreview = useMemo(() => {
     const players = parseInt(playerCount || '4');
     const firstDealerIndex = players - 1;
@@ -78,95 +97,70 @@ function App() {
 
   // Initialize current round first as it's needed by other states
   const [currentRoundIndex, setCurrentRoundIndex] = useState<number>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      return firstIncompleteRoundIndex >= 0 ? firstIncompleteRoundIndex : state.rounds.length - 1;
-    }
-    return 0;
+    const saved = loadGameState();
+    if (!saved) return 0;
+    return findFirstIncompleteRoundIndex(saved);
   });
 
   // Initialize bets confirmed state
   const [betsConfirmed, setBetsConfirmed] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      if (firstIncompleteRoundIndex >= 0) {
-        const round = state.rounds[firstIncompleteRoundIndex];
-        return round.bets.every((bet: number) => bet !== -1) && round.hands.some(hand => hand !== -1);
-      }
-    }
-    return false;
+    const saved = loadGameState();
+    if (!saved) return false;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return false;
+    const round = saved.rounds[idx];
+    return areAllBetsEntered(round) && round.hands.some(hand => hand !== -1);
   });
 
   // Initialize hands confirmed state
   const [handsConfirmed, setHandsConfirmed] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      if (firstIncompleteRoundIndex >= 0) {
-        const round = state.rounds[firstIncompleteRoundIndex];
-        return round.hands.every((hand: number) => hand !== -1);
-      }
-    }
-    return false;
+    const saved = loadGameState();
+    if (!saved) return false;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return false;
+    return saved.rounds[idx].hands.every((hand: number) => hand !== -1);
   });
 
   // Initialize current betting player
   const [currentBettingPlayer, setCurrentBettingPlayer] = useState<number>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      if (firstIncompleteRoundIndex >= 0) {
-        const round = state.rounds[firstIncompleteRoundIndex];
-        if (round.bets.some(bet => bet === -1)) {
-          const startIndex = (round.dealer + 1) % state.players;
-          for (let i = 0; i < state.players; i++) {
-            const playerIndex = (startIndex + i) % state.players;
-            if (round.bets[playerIndex] === -1) {
-              return playerIndex;
-            }
-          }
-        }
-      }
+    const saved = loadGameState();
+    if (!saved) return -1;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return -1;
+    const round = saved.rounds[idx];
+    if (round.bets.some(bet => bet === -1)) {
+      return findNextBettingPlayerPure(round, saved.players);
     }
     return -1;
   });
 
   // Initialize confirmation dialogs last, since they depend on other states
   const [showBetsConfirmation, setShowBetsConfirmation] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      if (firstIncompleteRoundIndex >= 0) {
-        const round = state.rounds[firstIncompleteRoundIndex];
-        return round.bets.every((bet: number) => bet !== -1) && 
-               !round.hands.some(hand => hand !== -1);
-      }
-    }
-    return false;
+    const saved = loadGameState();
+    if (!saved) return false;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return false;
+    const round = saved.rounds[idx];
+    return areAllBetsEntered(round) && !round.hands.some(hand => hand !== -1);
   });
 
   const [showHandsConfirmation, setShowHandsConfirmation] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const state = JSON.parse(saved) as GameState;
-      const firstIncompleteRoundIndex = state.rounds.findIndex(round => !round.isComplete);
-      if (firstIncompleteRoundIndex >= 0) {
-        const round = state.rounds[firstIncompleteRoundIndex];
-        return round.hands.every((hand: number) => hand !== -1) && 
-               !round.isComplete;
-      }
-    }
-    return false;
+    const saved = loadGameState();
+    if (!saved) return false;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return false;
+    const round = saved.rounds[idx];
+    return round.hands.every((hand: number) => hand !== -1) && !round.isComplete;
   });
 
-  const [cardsDealtReady, setCardsDealtReady] = useState(false);
+  // P1.4: skip deal gate on refresh if bets already exist
+  const [cardsDealtReady, setCardsDealtReady] = useState(() => {
+    const saved = loadGameState();
+    if (!saved) return false;
+    const idx = saved.rounds.findIndex(round => !round.isComplete);
+    if (idx < 0) return false;
+    return inferCardsDealtReady(saved.rounds[idx]);
+  });
   const [bettingTimer, setBettingTimer] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const activeRowRef = useRef<HTMLTableRowElement>(null);
@@ -198,26 +192,12 @@ function App() {
 
   const findNextBettingPlayer = useCallback((round: Round): number => {
     if (!gameState) return -1;
-    
-    // Start with the player after the dealer
-    const startIndex = (round.dealer + 1) % gameState.players;
-    
-    // Check each player in order
-    for (let i = 0; i < gameState.players; i++) {
-      const playerIndex = (startIndex + i) % gameState.players;
-      if (round.bets[playerIndex] === -1) {
-        return playerIndex;
-      }
-    }
-    return -1; // All bets are entered
+    return findNextBettingPlayerPure(round, gameState.players);
   }, [gameState]);
 
   useEffect(() => {
     if (gameState) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        ...gameState,
-        currentRound: currentRoundIndex
-      }));
+      saveGameState(gameState, currentRoundIndex);
       
       const currentRound = gameState.rounds[currentRoundIndex];
       if (!currentRound.isComplete && !betsConfirmed) {
@@ -271,40 +251,15 @@ function App() {
     });
   };
 
-  const areAllBetsEntered = (round: Round): boolean => {
-    return round.bets.every(bet => bet !== -1);
-  };
-
   const getValidNumbers = (round: Round, playerIndex: number): number[] => {
-    // Calculate who the last player in the betting sequence is
-    const startIndex = round.number === parseInt(roundCount) ? 0 : (round.dealer + 1) % gameState!.players;
-    const lastPlayerIndex = (startIndex + gameState!.players - 1) % gameState!.players;
-
-    // If this is the last player in sequence, restrict their numbers
-    if (playerIndex === lastPlayerIndex) {
-      const currentTotal = round.bets.reduce((sum, b, i) => 
-        i === playerIndex ? sum : sum + (b === -1 ? 0 : b), 0);
-      const forbiddenNumber = round.number - currentTotal;
-      return Array.from({ length: round.number + 1 }, (_, i) => i)
-        .filter(num => num !== forbiddenNumber);
-    }
-    
-    // Otherwise return all possible numbers
-    return Array.from({ length: round.number + 1 }, (_, i) => i);
+    if (!gameState) return [];
+    return getValidBetNumbers(round, gameState.players, playerIndex);
   };
 
   const isPlayerTurn = (round: Round, playerIndex: number): boolean => {
+    if (!gameState) return false;
     if (!betsConfirmed) {
-      // During editing, follow the original order
-      const startIndex = round.number === parseInt(roundCount) ? 0 : (round.dealer + 1) % gameState!.players;
-      for (let i = 0; i < gameState!.players; i++) {
-        const currentPlayerIndex = (startIndex + i) % gameState!.players;
-        // Found the first unbet player or this player
-        if (round.bets[currentPlayerIndex] === -1 || currentPlayerIndex === playerIndex) {
-          return currentPlayerIndex === playerIndex;
-        }
-      }
-      return false;
+      return isBettingTurn(round, gameState.players, playerIndex);
     }
     return playerIndex === currentBettingPlayer;
   };
@@ -343,33 +298,10 @@ function App() {
     setGameState({ ...gameState, rounds: newRounds });
   };
 
-  // Add a helper function to check if bets are valid
-  const areBetsValid = (round: Round): boolean => {
-    // Check if all bets are entered
-    if (!round.bets.every(bet => bet !== -1)) return false;
-    
-    // Check if total bets are valid for the round
-    const totalBets = round.bets.reduce((sum, bet) => sum + bet, 0);
-    return totalBets !== round.number; // Total bets should not equal round number
-  };
+  const areBetsValid = (round: Round): boolean => areBetsValidPure(round);
 
-  const getValidHandNumbers = (round: Round, playerIndex: number): number[] => {
-    // Calculate how many hands are already assigned (excluding this player)
-    const assignedHands = round.hands.reduce((sum, h, i) => 
-      i === playerIndex ? sum : sum + (h === -1 ? 0 : h), 0);
-    
-    // Calculate how many hands are left to assign
-    const remainingHands = round.number - assignedHands;
-    
-    // If this is the last player to record hands, they must take exactly the remaining hands
-    const unassignedPlayers = round.hands.filter((h, i) => h === -1 && i !== playerIndex).length;
-    if (unassignedPlayers === 0) {
-      return [remainingHands];
-    }
-    
-    // Otherwise, they can take any number from 0 up to remaining hands
-    return Array.from({ length: remainingHands + 1 }, (_, i) => i);
-  };
+  const getValidHandNumbers = (round: Round, playerIndex: number): number[] =>
+    getValidHandNumbersPure(round, playerIndex);
 
   const handleHandsChange = (roundIndex: number, playerIndex: number, hands: number) => {
     if (!gameState) return;
@@ -432,14 +364,14 @@ function App() {
   const cancelBetsConfirmation = () => {
     if (!gameState) return;
     
-    // Reset the confirmation state but keep the bets
+    // P1.5: clear last bettor's bet so they can re-edit
     setBetsConfirmed(false);
-    
-    // Find the next player who hasn't bet yet
     const round = gameState.rounds[currentRoundIndex];
-    const nextPlayer = findNextBettingPlayer(round);
-    setCurrentBettingPlayer(nextPlayer);
-    
+    const { playerIndex, bets } = cancelBetsEditTarget(round, gameState.players);
+    const newRounds = [...gameState.rounds];
+    newRounds[currentRoundIndex] = { ...round, bets };
+    setGameState({ ...gameState, rounds: newRounds });
+    setCurrentBettingPlayer(playerIndex);
     setShowBetsConfirmation(false);
   };
 
@@ -448,9 +380,7 @@ function App() {
     const newRounds = [...gameState.rounds];
     const round = newRounds[currentRoundIndex];
     
-    round.scores = round.hands.map((hands, i) => 
-      hands === round.bets[i] ? 10 + hands : hands
-    );
+    round.scores = calculateRoundScores(round);
     round.isComplete = true;
     setHandsConfirmed(true);
 
@@ -503,26 +433,16 @@ function App() {
 
   const calculateTotalScore = useCallback((playerIndex: number): number => {
     if (!gameState) return 0;
-    return gameState.rounds.reduce((sum, round) => sum + (round.scores[playerIndex] || 0), 0);
+    return calculateTotalScorePure(gameState, playerIndex);
   }, [gameState]);
 
   const getStreakAt = useCallback((playerIndex: number, roundIndex: number): number => {
     if (!gameState) return 0;
-    let streak = 0;
-    for (let i = roundIndex; i >= 0; i--) {
-      const r = gameState.rounds[i];
-      if (!r.isComplete) break;
-      if (r.hands[playerIndex] === r.bets[playerIndex]) {
-        streak++;
-      } else {
-        break;
-      }
-    }
-    return streak;
+    return getStreakAtPure(gameState, playerIndex, roundIndex);
   }, [gameState]);
 
   const handleNewGame = () => {
-    localStorage.removeItem(STORAGE_KEY);
+    clearGameState();
     setGameState(null);
     setPlayerCount('4');  // Set default player count
     setPlayerNames(DEFAULT_NAMES.slice(0, 4));  // Set default player names
@@ -541,16 +461,10 @@ function App() {
 
   const isLastBettingPlayer = (roundIndex: number, playerIndex: number): boolean => {
     if (!gameState || roundIndex !== currentRoundIndex) return false;
-    const round = gameState.rounds[roundIndex];
-    const startIndex = round.number === parseInt(roundCount) ? 0 : (round.dealer + 1) % gameState.players;
-    const lastPlayerIndex = (startIndex + gameState.players - 1) % gameState.players;
-    return playerIndex === lastPlayerIndex;
+    return isLastBettingPlayerPure(gameState.rounds[roundIndex], gameState.players, playerIndex);
   };
 
-  const isLastHandsInput = (round: Round): boolean => {
-    const unrecordedCount = round.hands.filter(h => h === -1).length;
-    return unrecordedCount === 1;
-  };
+  const isLastHandsInput = (round: Round): boolean => isLastHandsInputPure(round);
 
   const getWinningPlayers = useCallback(() => {
     if (!gameState || !isGameComplete()) return [];
@@ -635,7 +549,7 @@ function App() {
     setShowNewGamePrompt(false); // Hide the winner announcement when showing new game dialog
   };
 
-  // Add this effect to handle the betting timer
+  // Betting timer is a soft reminder only (P1.6) — it does not auto-advance or lock bets.
   useEffect(() => {
     if (!gameState || !isRoundActive(currentRoundIndex)) return;
     
@@ -1299,7 +1213,7 @@ function App() {
                         flexDirection: 'column',
                         alignItems: 'center',
                       }}>
-                        {calculateTotalScore(i) > 0 && calculateTotalScore(i) === getHighestScore(gameState) && (
+                        {isLeadingPlayer(gameState, i) && (
                           <Typography 
                             component="span" 
                             sx={{ 
@@ -1327,7 +1241,7 @@ function App() {
                           variant="subtitle1" 
                           sx={{ 
                             fontWeight: 800,
-                            color: calculateTotalScore(i) === getHighestScore(gameState) && calculateTotalScore(i) > 0 ? '#7C4DFF' : '#1a237e',
+                            color: isLeadingPlayer(gameState, i) ? '#7C4DFF' : '#1a237e',
                             mt: 0.5,
                           }}
                         >
@@ -1690,18 +1604,18 @@ function App() {
                         sx={{ 
                           textAlign: 'center',
                           fontWeight: 800,
-                          color: calculateTotalScore(playerIndex) === getHighestScore(gameState) ? '#7C4DFF' : '#1a237e',
+                          color: isLeadingPlayer(gameState, playerIndex) ? '#7C4DFF' : '#1a237e',
                           padding: '12px 24px',
                           borderRadius: '12px',
                           transition: 'all 0.3s ease',
-                          ...(calculateTotalScore(playerIndex) === getHighestScore(gameState) && {
+                          ...(isLeadingPlayer(gameState, playerIndex) && {
                             transform: 'scale(1.1)',
                           })
                         }}
                       >
                         {calculateTotalScore(playerIndex)}
                       </Typography>
-                      {calculateTotalScore(playerIndex) === getHighestScore(gameState) && calculateTotalScore(playerIndex) > 0 && (
+                      {isLeadingPlayer(gameState, playerIndex) && (
                         <Typography sx={{ textAlign: 'center', fontSize: '24px', mt: 0.5 }}>
                           👑
                         </Typography>

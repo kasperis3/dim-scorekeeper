@@ -4,8 +4,19 @@ A React-based web application for scoring the card game "Dim". Built with TypeSc
 
 ## TODOs
 
-- Store complete games in a database
+See [ENHANCEMENTS.md](ENHANCEMENTS.md) for the full backlog and audit. Top open items:
+
 - Hide bets once entered
+- Hard-edit / redo a completed round
+- Save / export completed games
+
+## Tests
+
+Core game rules and storage helpers are covered by Jest unit tests:
+
+```bash
+CI=true npm test -- --watchAll=false
+```
 
 ## Features
 
