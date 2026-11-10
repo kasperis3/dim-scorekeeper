@@ -1,59 +1,150 @@
-# Dim Scorekeeper Enhancement Requests
+# Dim Scorekeeper — Enhancements & Audit
 
-## Game Flow Improvements
+Last audited: 2026-11-10 (post UI enhancements merge to `main`).
 
-- [ ] Add dealer confirmation before starting bet timer
-  - Timer should only start after dealer confirms cards have been dealt
-  - Add a "Cards Dealt" confirmation button/checkbox
-- [ ] Add voice control inputs
-  - Voice commands for entering bets and hands
-  - Voice commands for navigation and game control
-- [ ] Add voice announcements
-  - Announce round details (suit and number of hands)
-  - Announce player turns
-  - Announce round completion and scores
+## How work ships
 
-## Visual Enhancements
+1. Create a feature branch from `main`
+2. Open a PR → Netlify builds a **Deploy Preview**
+3. Merge to `main` → Netlify deploys **production** automatically
+4. Note: Netlify sets `CI=true`, so ESLint warnings fail the build
 
-- [ ] Add emoji indicators
-  - Add joker face emoji (🤡) to losing scores (like the crown for winning)
-  - Add fire streak visual (🔥) for players who get 2+ rounds correct in a row
-- [ ] Improve score display
-  - Display cumulative bets while taking bets
-  - Show total points at the top of the table
-  - Make highest score for each round bold and highlighted
-  - Add confetti animation for winning column in each round
-- [ ] Improve table usability
-  - Freeze top row (player names) when scrolling
-  - Add legend to explain box colors (especially for last player indicator)
-- [ ] Enhance game completion
-  - Make game win sign more impactful
-  - Add more celebratory animations/effects
+There is no GitHub Actions workflow in-repo; CI/CD is Netlify ↔ GitHub only.
 
-## Game Management
+---
 
-- [ ] Add game state management
-  - Option to save game for later analysis
-  - Export game data for record keeping
-- [ ] Add game flexibility
-  - Add "hard edit" option to redo rounds if mistakes are made
-  - Add option to play "all the way up" (reverse order)
-  - Add ability to modify game settings mid-game
+## Completed (shipped)
 
-## Implementation Notes
+- [x] Sticky header with player names while scrolling
+- [x] Cumulative totals in the sticky header (and bottom TOTAL row)
+- [x] Highlight bust vs successful scores (red / green chips)
+- [x] Fire streak indicator for 2+ consecutive successful rounds
+- [x] Dealer “cards dealt” gate before betting timer / bet inputs
+- [x] Setup-page heads-up for who deals and bets first
+- [x] Leading-player crown on totals (header + bottom)
 
-- Voice features should be optional and respect user's device settings
-- Visual enhancements should be toggleable for performance
-- Game state management should include data export in common formats
-- All new features should maintain the current clean, intuitive interface
+---
 
-## Priority Suggestions
+## Priority 1 — Bugs / edge cases (fix next)
 
-1. Dealer confirmation and timer adjustment
-2. Visual enhancements for scores and winning indicators
-3. Table usability improvements (frozen header, legends)
-4. Game state management features
-5. Voice features
-6. Additional game flexibility options
+### P1.1 Betting order depends on UI `roundCount`, not game state
 
-_Note: This list is based on user feedback and will be updated as new requests come in._
+**Bug:** `getValidNumbers`, `isPlayerTurn`, and `isLastBettingPlayer` use:
+
+```ts
+round.number === parseInt(roundCount) ? 0 : (round.dealer + 1) % players
+```
+
+`roundCount` is React state that defaults to `"10"` and is **not restored** from `localStorage`. After a refresh (or any game whose max round ≠ 10), a mid-game round whose `number === 10` can get the wrong “last bettor” restriction.
+
+**Fix:** Derive “opening round” from `gameState.rounds[0].number` (or store `totalRounds` on `GameState`) and never use the setup `roundCount` selector during play.
+
+### P1.2 Corrupted / invalid `localStorage` crashes the app
+
+**Bug:** Multiple `JSON.parse(localStorage.getItem(...))` calls have no `try/catch`. Bad data → blank white screen.
+
+**Fix:** Wrap parse in try/catch; on failure clear `STORAGE_KEY` and start fresh.
+
+### P1.3 Setup fields not restored with saved game
+
+**Bug:** On reload, `playerNames` / `playerCount` / `roundCount` stay at setup defaults even though `gameState` restores. Affects new-game UX and amplifies P1.1.
+
+**Fix:** When hydrating from storage, sync those fields from `gameState`.
+
+### P1.4 Refresh mid-round always re-shows cards-dealt gate
+
+**Behavior:** `cardsDealtReady` is not persisted (intentionally safe). If bets were already entered and the page reloads, the deal overlay returns and can stack awkwardly with the bets-confirmation dialog.
+
+**Fix options:**
+
+- Persist `cardsDealtReady` (or infer: if any bet ≠ -1, treat as dealt), **or**
+- If any bets exist, skip the overlay and resume betting/confirmation
+
+### P1.5 Cancel bets confirmation leaves awkward edit state
+
+**Bug:** After “No, Keep Editing” with all bets filled, `currentBettingPlayer` is `-1` and turn logic is ambiguous — hard to change a single wrong bet.
+
+**Fix:** On cancel, clear the last player’s bet (or open an explicit “edit bets” mode).
+
+### P1.6 Betting timer is cosmetic only
+
+Timer hits 0 and disappears; nothing is enforced or announced. Either wire a soft nudge (highlight current bettor) or document that it’s a reminder only.
+
+### P1.7 All-zero totals highlight everyone as leader
+
+Bottom TOTAL (and some score color checks) treat score `0` as “highest” when all players are tied at 0, so everyone can get leader styling before any points are scored.
+
+**Fix:** Only apply leader styling when `maxScore > 0` (header crown already does this in places).
+
+---
+
+## Priority 2 — Product enhancements
+
+### Still open from original backlog
+
+- [ ] Hide bets once entered (show only after hands phase / round complete)
+- [ ] Legend for border colors (current bettor solid / last bettor dashed)
+- [ ] Hard-edit / redo a completed round when mistakes happen
+- [ ] Save / export completed games (local download first; DB later)
+- [ ] Persist game history across sessions beyond single `localStorage` slot
+- [ ] “Play all the way up” (ascending card counts) option
+- [ ] Stronger end-game celebration / clearer multi-winner UI
+
+### Nice-to-haves (lower)
+
+- [ ] Cumulative bets total while betting is in progress
+- [ ] Bold / highlight highest score **within each round**
+- [ ] Per-round confetti for a made contract (optional, toggleable)
+- [ ] Joker emoji on busted scores (mirror crown)
+- [ ] Voice input / announcements (optional, device-permission aware)
+- [ ] Offline-safe sounds (bundle assets instead of Mixkit CDN URLs)
+- [ ] Split monolithic `App.tsx` into smaller modules (table, setup, hooks)
+
+---
+
+## Priority 3 — Engineering / CI
+
+- [ ] Add `netlify.toml` so build command / publish dir live in-repo
+- [ ] Add GitHub Action: `CI=true npm run build` on PRs (catch Netlify failures early)
+- [ ] Avoid unused-variable ESLint failures (already burned once with `getCurrentStreak`)
+- [ ] Consider validating `GameState` shape on load (version field + migration)
+
+---
+
+## Suggested audit playtest checklist
+
+Use a Deploy Preview or `npm start`:
+
+1. **Fresh game** — setup heads-up matches first dealer / first bettor
+2. **Deal gate** — cannot bet until “Cards dealt”; timer starts only after
+3. **Last bettor** — forbidden total ≠ cards is enforced
+4. **Hands** — last player forced to remaining tricks; scores green/red correctly
+5. **Streak** — 2+ made contracts show 🔥 under score; bust breaks streak
+6. **Scroll** — sticky header stays readable; deal overlay does not cover names
+7. **Refresh** mid-betting, mid-hands, after all bets (before confirm), after deal gate
+8. **Non-default setup** — e.g. 5 players / 13 rounds, refresh on round 10, re-check last-bettor rule (P1.1)
+9. **Tie games** — multiple winners announced correctly
+10. **New game** — clears storage and returns to setup cleanly
+
+---
+
+## Recommended next PRs
+
+| PR | Scope | Why |
+|----|--------|-----|
+| **A** | Fix P1.1 + P1.3 (betting order from `gameState`) | Real scoring-rule bug after refresh |
+| **B** | Safe localStorage load (P1.2) + refresh deal-gate UX (P1.4) | Crash + confusing mid-game reload |
+| **C** | Hide bets once confirmed; last-bettor legend | High-value UX from original TODOs |
+| **D** | Hard-edit completed round | Table play mistake recovery |
+| **E** | `netlify.toml` + optional GitHub build check | Fewer surprise CI failures |
+
+---
+
+## Implementation notes
+
+- Prefer small PRs so Netlify previews stay easy to verify at the table
+- Keep deal-gate / timer behavior explicit and dealer-driven
+- Visual extras (voice, confetti density) should stay optional
+- When marking items done here, also update the short TODOs list in `README.md`
+
+_This file is the living backlog. Update it when shipping or discovering new edge cases._
